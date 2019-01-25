@@ -662,7 +662,7 @@ int fbm340_calculation(struct fbm340_data *barom)
 		/* calculation for real temperature value*/
 		UT = barom->raw_temperature;
 		DT = ((UT - 8388608) >> 4) + (cali->C0 << 4);
-		X01 = (cali->C1 + 4459L) * DT >> 1;
+		X01 = (cali->C1 + 4498L) * DT >> 1;
 		X02 = ((((cali->C2 - 256L) * DT) >> 14) * DT) >> 4;
 		X03 = (((((cali->C3 * DT) >> 18) * DT) >> 18) * DT);
 		DT2 = (X01 + X02 + X03) >> 12;
