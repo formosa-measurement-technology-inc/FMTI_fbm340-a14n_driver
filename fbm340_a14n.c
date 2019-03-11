@@ -21,14 +21,15 @@
  *
  * File Name    :
  * Authors      : conrad@fmti.com.tw
- * Version      : 1.0.0
- * Date         : 2018/5/2
- * Description  : FBM340 pressure sensor API for MCU of ARM_M0 core
+ * Version      : 1.1.0
+ * Date         : 2019/3/11
+ * Description  : FBM340-A14N pressure sensor API for MCU of ARM_M0 core
  *
  */
 
 /* Revised history
  * 1.0.0: first release
+ * 1.1.0: To add a function calculating water depth 
  *
  */
 
@@ -91,8 +92,7 @@ static uint8_t fbm340_spi_writeblock(uint8_t reg_addr, uint32_t cnt, const uint8
 	SPI_WRITE_TX0(SPI0, (reg_addr + (cnt - 1)));
 	SPI_TRIGGER(SPI0);
 	while (SPI_IS_BUSY(SPI0));
-	for (i = 0; i < cnt; i++)
-	{
+	for (i = 0; i < cnt; i++) {
 		SPI_WRITE_TX0(SPI0, *(reg_data + i));
 		SPI_TRIGGER(SPI0);
 		/* Check SPI0 busy status */
@@ -132,8 +132,7 @@ static uint8_t fbm340_spi_readblock(uint8_t reg_addr, uint32_t cnt, uint8_t *reg
 	SPI_WRITE_TX0(SPI0, reg_addr + (cnt - 1));
 	SPI_TRIGGER(SPI0);
 	while (SPI_IS_BUSY(SPI0));
-	for (i = (cnt - 1); i >= 0; i--)
-	{
+	for (i = (cnt - 1); i >= 0; i--) {
 		SPI_WRITE_TX0(SPI0, 0x00);//dummy clock
 		SPI_TRIGGER(SPI0);
 		while (SPI_IS_BUSY(SPI0));
@@ -169,6 +168,27 @@ static uint8_t fbm340_i2c_readblock(uint8_t reg_addr, uint32_t cnt, uint8_t *reg
 	cnt_read = I2C_ReadMultiBytesOneReg(I2C0, FBM340_I2C_SLAVE_ADDR\
 	                                    , reg_addr, reg_data, cnt);
 	status = (cnt_read > 0) ?  0 : 1;
+	return status;
+}
+#endif
+
+#ifdef GPIO_I2C
+static uint8_t fbm340_i2c_writeblock(uint8_t reg_addr, uint32_t cnt, const uint8_t *reg_data)
+{
+	int8_t status;
+	uint32_t cnt_write;
+	cnt_write = gpio_i2c_writeBlock(FBM340_I2C_SLAVE_ADDR, reg_addr, \
+	                                cnt, reg_data);
+	status = (cnt_write > 0) ?  0 : -1;
+	return status;
+}
+static uint8_t fbm340_i2c_readblock(uint8_t reg_addr, uint32_t cnt, uint8_t *reg_data)
+{
+	int8_t status;
+	uint32_t cnt_read;
+	cnt_read = gpio_i2c_readBlock(FBM340_I2C_SLAVE_ADDR, reg_addr, \
+	                              cnt, reg_data);
+	status = (cnt_read > 0) ?  0 : -1;
 	return status;
 }
 #endif
@@ -384,7 +404,6 @@ static int32_t fbm340_read_store_otp_data(struct fbm340_data *barom)
 	uint8_t tmp[FBM340_CALIBRATION_DATA_LENGTH] = {0};
 	uint16_t R[10] = {0};
 	int32_t status;
-	//uint8_t i;
 	struct fbm340_calibration_data *cali = &(barom->calibration);
 
 	status = barom->bus_read(FBM340_CALIBRATION_DATA_START0,
@@ -576,7 +595,6 @@ static int32_t fbm340_chipid_check(struct fbm340_data *barom)
 	if (chip_id_read != FBM340_CHIP_ID) {
 		err = -1;
 		return err;
-//		goto err_chip_id_chk;
 	} else {
 		barom->chip_id = chip_id_read;
 		return err = 0;
@@ -597,17 +615,14 @@ void fbm340_update_data(void)
 	tick_current = TMR0_Ticks;
 	tick_diff = tick_current - tick_last;
 
-	if (t_start_flag == 0 && !fbm340_update_rdy)
-	{
+	if (t_start_flag == 0 && !fbm340_update_rdy) {
 #ifdef DEBUG_FBM340
 		printf("start t_measurement\r\n");
 #endif//DEBUG_FBM340			
 		fbm340_startMeasure_temp(barom);
 		t_start_flag = 1;
 		tick_last = TMR0_Ticks;
-	}
-	else if ((tick_diff * 1000 > barom->cnvTime_temp ) && (p_start_flag == 0))
-	{
+	} else if ((tick_diff * 1000 > barom->cnvTime_temp ) && (p_start_flag == 0)) {
 #ifdef DEBUG_FBM340
 		printf("start p_measurement\r\n");
 #endif//DEBUG_FBM340			
@@ -615,9 +630,7 @@ void fbm340_update_data(void)
 		fbm340_startMeasure_press(barom);
 		p_start_flag = 1;
 		tick_last = TMR0_Ticks;
-	}
-	else if (tick_diff * 1000 > barom->cnvTime_press )
-	{
+	} else if (tick_diff * 1000 > barom->cnvTime_press ) {
 #ifdef DEBUG_FBM340
 		printf("read pressure\r\n");
 #endif//DEBUG_FBM340			
@@ -670,27 +683,27 @@ int fbm340_calculation(struct fbm340_data *barom)
 		/* calculation for real pressure value*/
 		UP = barom->raw_pressure;
 		X11 = ((cali->C5 - 15446L) * DT2);
-	X12 = ((((cali->C6 - 4096L) * DT2) >> 16) * DT2) >> 4;
-	X13 = ((X11 + X12) >> 11) + ((cali->C4 - 122684) << 4);
-	X21 = ((cali->C8 + 1528L) * DT2) >> 11;
-	X22 = (((cali->C9 * DT2) >> 17) * DT2) >> 13;
-	X23 = abs (X22 - X21);
+		X12 = ((((cali->C6 - 4096L) * DT2) >> 16) * DT2) >> 4;
+		X13 = ((X11 + X12) >> 11) + ((cali->C4 - 122684) << 4);
+		X21 = ((cali->C8 + 1528L) * DT2) >> 11;
+		X22 = (((cali->C9 * DT2) >> 17) * DT2) >> 13;
+		X23 = abs (X22 - X21);
 
-	X24 = (X23 >> 11) * (cali->C7 + 596352);
-	X25 = ((X23 & 0x7FF) * (cali->C7 + 596352)) >> 11;
-	if ((X22 - X21) < 0)
-		X26 = ((0 - X24 - X25) >> 9) + cali->C7 + 596352;
-	else
-		X26 = ((X24 + X25) >> 9) + cali->C7 + 596352;
+		X24 = (X23 >> 11) * (cali->C7 + 596352);
+		X25 = ((X23 & 0x7FF) * (cali->C7 + 596352)) >> 11;
+		if ((X22 - X21) < 0)
+			X26 = ((0 - X24 - X25) >> 9) + cali->C7 + 596352;
+		else
+			X26 = ((X24 + X25) >> 9) + cali->C7 + 596352;
 
-	PP1 = (((UP - 8388608) >> 1) - X13) >> 4;
-	PP2 = ((X26 >> 12) * PP1) >> 1;
-	PP3 = ((X26 & 0xFFF) * PP1) >> 13;
-	PP4 = (PP2 + PP3) >> 3;
-	CF = (2097152 + cali->C12 * DT2) >> 2;
-	X31 = ((CF * cali->C10) * PP4) >> 6;
-	X32 = (((((CF * cali->C11) >> 20) * PP4) >> 22) * PP4);
-	RP = ((X31 + X32) >> 11) + PP4 + 100000;
+		PP1 = (((UP - 8388608) >> 1) - X13) >> 4;
+		PP2 = ((X26 >> 12) * PP1) >> 1;
+		PP3 = ((X26 & 0xFFF) * PP1) >> 13;
+		PP4 = (PP2 + PP3) >> 3;
+		CF = (2097152 + cali->C12 * DT2) >> 2;
+		X31 = ((CF * cali->C10) * PP4) >> 6;
+		X32 = (((((CF * cali->C11) >> 20) * PP4) >> 22) * PP4);
+		RP = ((X31 + X32) >> 11) + PP4 + 100000;
 		break;
 	};
 
@@ -723,92 +736,77 @@ int32_t abs_altitude(int32_t real_pressure)
 		h0	=	-138507	;
 		hs0	=	-5252	;
 		hs1	=	311	;
-	}
-	else if ( RP >= 784000 ) {
+	} else if ( RP >= 784000 ) {
 		P0	=	98	;
 		h0	=	280531	;
 		hs0	=	-5468	;
 		hs1	=	338	;
-	}
-	else if ( RP >= 744000 ) {
+	} else if ( RP >= 744000 ) {
 		P0	=	93	;
 		h0	=	717253	;
 		hs0	=	-5704	;
 		hs1	=	370	;
-	}
-	else if ( RP >= 704000 ) {
+	} else if ( RP >= 704000 ) {
 		P0	=	88	;
 		h0	=	1173421	;
 		hs0	=	-5964	;
 		hs1	=	407	;
-	}
-	else if ( RP >= 664000 ) {
+	} else if ( RP >= 664000 ) {
 		P0	=	83	;
 		h0	=	1651084	;
 		hs0	=	-6252	;
 		hs1	=	450	;
-	}
-	else if ( RP >= 624000 ) {
+	} else if ( RP >= 624000 ) {
 		P0	=	78	;
 		h0	=	2152645	;
 		hs0	=	-6573	;
 		hs1	=	501	;
-	}
-	else if ( RP >= 584000 ) {
+	} else if ( RP >= 584000 ) {
 		P0	=	73	;
 		h0	=	2680954	;
 		hs0	=	-6934	;
 		hs1	=	560	;
-	}
-	else if ( RP >= 544000 ) {
+	} else if ( RP >= 544000 ) {
 		P0	=	68	;
 		h0	=	3239426	;
 		hs0	=	-7342	;
 		hs1	=	632	;
-	}
-	else if ( RP >= 504000 ) {
+	} else if ( RP >= 504000 ) {
 		P0	=	63	;
 		h0	=	3832204	;
 		hs0	=	-7808	;
 		hs1	=	719	;
-	}
-	else if ( RP >= 464000 ) {
+	} else if ( RP >= 464000 ) {
 		P0	=	58	;
 		h0	=	4464387	;
 		hs0	=	-8345	;
 		hs1	=	826	;
-	}
-	else if ( RP >= 424000 ) {
+	} else if ( RP >= 424000 ) {
 		P0	=	53	;
 		h0	=	5142359	;
 		hs0	=	-8972	;
 		hs1	=	960	;
-	}
-	else if ( RP >= 384000 ) {
+	} else if ( RP >= 384000 ) {
 		P0	=	48	;
 		h0	=	5874268	;
 		hs0	=	-9714	;
 		hs1	=	1131	;
-	}
-	else if ( RP >= 344000 ) {
+	} else if ( RP >= 344000 ) {
 		P0	=	43	;
 		h0	=	6670762	;
 		hs0	=	-10609	;
 		hs1	=	1354	;
-	}
-	else if ( RP >= 304000 ) {
+	} else if ( RP >= 304000 ) {
 		P0	=	38	;
 		h0	=	7546157	;
 		hs0	=	-11711	;
 		hs1	=	1654	;
-	}
-	else if ( RP >= 264000 ) {
+	} else if ( RP >= 264000 ) {
 		P0	=	33	;
 		h0	=	8520395	;
 		hs0	=	-13103	;
 		hs1	=	2072	;
-	}
-	else {
+	} else {
 		P0	=	28	;
 		h0	=	9622536	;
 		hs0	=	-14926	;
@@ -823,4 +821,29 @@ int32_t abs_altitude(int32_t real_pressure)
 
 	return RH;
 }
+/**
+ * @brief      { API for calculating water depth }
+ *
+ * @param[in]  real_pressure  The real pressure, unit: Pa
+ *
+ * @return     { water_depth: water depth
+ *               The unit of water_depth is millimeter(mm). }
+ */
+int32_t water_depth_calculation(int32_t real_pressure)
+{
+#define WATER_DENSITY 1025L /* unit:kg/m^3, range: 1000 to 1050 */
+#define SEA_LEVEL_PRESSURE 101325 /* uint: Pa */
 
+	int32_t pressure, water_depth, d1, hc1;
+
+	pressure = real_pressure;
+	d1 = WATER_DENSITY - 1025L;
+	hc1	= (((d1 * 27325752) >> 5) * d1) >> 5;
+	hc1	= ((((d1 * 27348101) - hc1) >> 10) - 27364648) >> 16;
+	water_depth = ((((SEA_LEVEL_PRESSURE - pressure) * hc1) >> 10) * 1000) >> 12;
+
+#undef WATER_DENSITY
+#undef SEA_LEVEL_PRESSURE
+
+	return water_depth;
+}

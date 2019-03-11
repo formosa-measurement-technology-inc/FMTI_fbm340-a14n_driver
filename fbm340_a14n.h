@@ -27,6 +27,7 @@
 #include "gpio_i2c.h"
 
 #define I2C
+//#define GPIO_I2C
 //#define SPI
 #define FBM340_NAME     "fbm340-a14n"
 #define FBM340_CHIP_ID  0x42
