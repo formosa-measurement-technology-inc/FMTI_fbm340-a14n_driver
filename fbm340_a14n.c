@@ -840,7 +840,8 @@ int32_t water_depth_calculation(int32_t real_pressure)
 	d1 = WATER_DENSITY - 1025L;
 	hc1	= (((d1 * 27325752) >> 5) * d1) >> 5;
 	hc1	= ((((d1 * 27348101) - hc1) >> 10) - 27364648) >> 16;
-	water_depth = ((((SEA_LEVEL_PRESSURE - pressure) * hc1) >> 10) * 1000) >> 12;
+	/* The unit of water_depth is millimeter(mm). */ 
+    water_depth = ((((SEA_LEVEL_PRESSURE - pressure) * hc1) >> 10) * 1000) >> 12;
 
 #undef WATER_DENSITY
 #undef SEA_LEVEL_PRESSURE
