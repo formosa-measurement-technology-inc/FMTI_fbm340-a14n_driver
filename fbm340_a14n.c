@@ -29,14 +29,14 @@
 
 /* Revised history
  * 1.0.0: first release
- * 1.1.0: To add a function calculating water depth 
+ * 1.1.0: To add a function calculating water depth
  *
  */
 
 #include "fbm340_a14n.h"
 
-extern volatile uint32_t TMR0_Ticks;
-extern volatile uint32_t fbm340_update_rdy;
+volatile uint32_t TMR0_Ticks;
+volatile uint32_t fbm340_update_rdy;
 
 static void fbm340_us_delay(uint32_t us);
 #ifdef SPI
@@ -56,6 +56,8 @@ static int32_t fbm340_set_oversampling_rate(struct fbm340_data *barom
 static int32_t fbm340_chipid_check(struct fbm340_data *barom);
 static int32_t fbm340_version_identification(struct fbm340_data *barom);
 static int32_t fbm340_calculation(struct fbm340_data *barom);
+static int32_t pressure_altitude_conversion(int32_t real_pressure);
+static int32_t water_depth_calculation(int32_t real_pressure);
 
 /**
  * { pointer of fbm340 data }
@@ -171,28 +173,6 @@ static uint8_t fbm340_i2c_readblock(uint8_t reg_addr, uint32_t cnt, uint8_t *reg
 	return status;
 }
 #endif
-
-#ifdef GPIO_I2C
-static uint8_t fbm340_i2c_writeblock(uint8_t reg_addr, uint32_t cnt, const uint8_t *reg_data)
-{
-	int8_t status;
-	uint32_t cnt_write;
-	cnt_write = gpio_i2c_writeBlock(FBM340_I2C_SLAVE_ADDR, reg_addr, \
-	                                cnt, reg_data);
-	status = (cnt_write > 0) ?  0 : -1;
-	return status;
-}
-static uint8_t fbm340_i2c_readblock(uint8_t reg_addr, uint32_t cnt, uint8_t *reg_data)
-{
-	int8_t status;
-	uint32_t cnt_read;
-	cnt_read = gpio_i2c_readBlock(FBM340_I2C_SLAVE_ADDR, reg_addr, \
-	                              cnt, reg_data);
-	status = (cnt_read > 0) ?  0 : -1;
-	return status;
-}
-#endif
-
 /**
  * @brief      { API for fbm340 delay }
  *
@@ -214,6 +194,8 @@ static void fbm340_us_delay(uint32_t us)
 int8_t fbm340_init(void)
 {
 	int32_t err;
+	uint8_t data_buf;
+
 
 #ifdef SPI
 	fbm340_barom.bus_write = fbm340_spi_writeblock;
@@ -230,37 +212,64 @@ int8_t fbm340_init(void)
 	err = fbm340_chipid_check(barom);
 	if (err) {
 		err = -1;
-//		goto err_chip_id_chk;
+		goto err_chip_id_chk;
+	} else {
+#ifdef DEBUG_FBM340
+		printf("%s:fbm340_chipid_check() passed!\n", __func__);
+#endif
 	}
 
 	err = fbm340_version_identification(barom);
 	if (err) {
 		err = -2;
-//		goto err_version_identification;
+		goto err_version_identification;
+	} else {
+#ifdef DEBUG_FBM340
+		printf("%s:fbm340_version_identification() passed!\n", __func__);
+#endif
 	}
 
 	err = fbm340_read_store_otp_data(barom);
 	if (err) {
 		err = -3;
-//		goto err_read_otp;
+		goto err_read_otp;
+	} else {
+#ifdef DEBUG_FBM340
+		printf("%s:fbm340_read_store_otp_data() passed!\n", __func__);
+#endif
 	}
 	err = 0;
 
 	fbm340_set_oversampling_rate(barom, OVERSAMPLING_RATE_DEFAULT);
-
-//err_chip_id_chk:
-//err_version_identification:
-//err_read_otp:
+	/* Setting the P_CONFIG_REG_GAIN */
+#define P_CONFIG_REG_GAIN_SETTING FBM340_P_CONFIG_REG_GAIN_X32
+	barom->bus_read(FBM340_P_CONFIG_REG, sizeof(uint8_t), &data_buf);
+	data_buf &= ~(FBM340_P_CONFIG_REG_GAIN_MAK);
+	data_buf |= P_CONFIG_REG_GAIN_SETTING;
+	barom->bus_write(FBM340_P_CONFIG_REG, sizeof(uint8_t), &data_buf);
+#ifdef DEBUG_FBM340
+	printf("%s:Setting of FBM340_P_CONFIG_REG_GAIN: %#x\n", __func__, P_CONFIG_REG_GAIN_SETTING);
+#endif
 
 #ifdef DEBUG_FBM340
-	printf("fbm340_init; fbm340_ID:%#x,err:%d\n", fbm340_barom.chip_id, err);
-#endif//DEBUG_FBM340
-	if (err != 0) {
-		return -1;
-	}
+	printf("%s:fbm340_init() succeeded!\n", __func__);
+#endif
+	return err;
+
+err_chip_id_chk:
 #ifdef DEBUG_FBM340
-	printf("fbm340_init succeeded!\n");
-#endif//DEBUG_FBM340	
+	printf("%s:fbm340_init() failed!; fbm340_ID:%#x,err:%d\n", __func__, fbm340_barom.chip_id, err);
+#endif
+	return err;
+err_version_identification:
+#ifdef DEBUG_FBM340
+	printf("%s:fbm340_init() failed!; fbm340 version:%#x,err:%d\n", __func__, fbm340_barom.hw_ver, err);
+#endif
+	return err;
+err_read_otp:
+#ifdef DEBUG_FBM340
+	printf("%s:fbm340_init() failed!; fbm340 otp reading failed!,err:%d\n", __func__, err);
+#endif
 	return err;
 }
 
@@ -346,8 +355,8 @@ static int fbm340_get_raw_temperature(struct fbm340_data *barom)
 	barom->raw_temperature = (buf[0] * 256 * 256) + (buf[1] * 256) + buf[2];
 
 #ifdef DEBUG_FBM340
-	printf("%s: uncompensated temperature: %d\n", FBM340_NAME, barom->raw_temperature);
-#endif//DEBUG_FBM340
+	printf("%s: uncompensated temperature: %d\n", DEVICE_NAME, barom->raw_temperature);
+#endif
 	return err;
 }
 /**
@@ -387,8 +396,8 @@ static int32_t fbm340_get_raw_pressure(struct fbm340_data *barom)
 	barom->raw_pressure = (buf[0] * 256 * 256) + (buf[1] * 256) + buf[2];
 
 #ifdef DEBUG_FBM340
-	printf("%s: uncompensated pressure:  %d\n", FBM340_NAME, barom->raw_pressure);
-#endif//DEBUG_FBM340
+	printf("%s: uncompensated pressure:  %d\n", DEVICE_NAME, barom->raw_pressure);
+#endif
 
 	return err;
 }
@@ -401,10 +410,10 @@ static int32_t fbm340_get_raw_pressure(struct fbm340_data *barom)
  */
 static int32_t fbm340_read_store_otp_data(struct fbm340_data *barom)
 {
-	uint8_t tmp[FBM340_CALIBRATION_DATA_LENGTH] = {0};
-	uint16_t R[10] = {0};
-	int32_t status;
 	struct fbm340_calibration_data *cali = &(barom->calibration);
+	int32_t status;
+	uint16_t R[10] = {0};
+	uint8_t tmp[FBM340_CALIBRATION_DATA_LENGTH] = {0};
 
 	status = barom->bus_read(FBM340_CALIBRATION_DATA_START0,
 	                         (FBM340_CALIBRATION_DATA_LENGTH - 2) * sizeof(uint8_t),
@@ -418,8 +427,8 @@ static int32_t fbm340_read_store_otp_data(struct fbm340_data *barom)
 	status = barom->bus_read(FBM340_CALIBRATION_DATA_START2, sizeof(uint8_t), (uint8_t *)tmp + 19);
 	if (status < 0)
 		goto exit;
-
-	R[0] = (tmp[0] << 8 | tmp[1]); //read OTP data here
+	/* Read OTP data here */
+	R[0] = (tmp[0] << 8 | tmp[1]);
 	R[1] = (tmp[2] << 8 | tmp[3]);
 	R[2] = (tmp[4] << 8 | tmp[5]);
 	R[3] = (tmp[6] << 8 | tmp[7]);
@@ -452,30 +461,30 @@ static int32_t fbm340_read_store_otp_data(struct fbm340_data *barom)
 	};
 
 #ifdef DEBUG_FBM340
-	printf("%s: R0= %#x\n", FBM340_NAME, R[0]);
-	printf("%s: R1= %#x\n", FBM340_NAME, R[1]);
-	printf("%s: R2= %#x\n", FBM340_NAME, R[2]);
-	printf("%s: R3= %#x\n", FBM340_NAME, R[3]);
-	printf("%s: R4= %#x\n", FBM340_NAME, R[4]);
-	printf("%s: R5= %#x\n", FBM340_NAME, R[5]);
-	printf("%s: R6= %#x\n", FBM340_NAME, R[6]);
-	printf("%s: R7= %#x\n", FBM340_NAME, R[7]);
-	printf("%s: R8= %#x\n", FBM340_NAME, R[8]);
-	printf("%s: R9= %#x\n", FBM340_NAME, R[9]);
-	printf("%s: C0= %d\n", FBM340_NAME, cali->C0);
-	printf("%s: C1= %d\n", FBM340_NAME, cali->C1);
-	printf("%s: C2= %d\n", FBM340_NAME, cali->C2);
-	printf("%s: C3= %d\n", FBM340_NAME, cali->C3);
-	printf("%s: C4= %d\n", FBM340_NAME, cali->C4);
-	printf("%s: C5= %d\n", FBM340_NAME, cali->C5);
-	printf("%s: C6= %d\n", FBM340_NAME, cali->C6);
-	printf("%s: C7= %d\n", FBM340_NAME, cali->C7);
-	printf("%s: C8= %d\n", FBM340_NAME, cali->C8);
-	printf("%s: C9= %d\n", FBM340_NAME, cali->C9);
-	printf("%s: C10= %d\n", FBM340_NAME, cali->C10);
-	printf("%s: C11= %d\n", FBM340_NAME, cali->C11);
-	printf("%s: C12= %d\n", FBM340_NAME, cali->C12);
-#endif//DEBUG_FBM340
+	printf("%s: R0= %#x\n", DEVICE_NAME, R[0]);
+	printf("%s: R1= %#x\n", DEVICE_NAME, R[1]);
+	printf("%s: R2= %#x\n", DEVICE_NAME, R[2]);
+	printf("%s: R3= %#x\n", DEVICE_NAME, R[3]);
+	printf("%s: R4= %#x\n", DEVICE_NAME, R[4]);
+	printf("%s: R5= %#x\n", DEVICE_NAME, R[5]);
+	printf("%s: R6= %#x\n", DEVICE_NAME, R[6]);
+	printf("%s: R7= %#x\n", DEVICE_NAME, R[7]);
+	printf("%s: R8= %#x\n", DEVICE_NAME, R[8]);
+	printf("%s: R9= %#x\n", DEVICE_NAME, R[9]);
+	printf("%s: C0= %d\n", DEVICE_NAME, cali->C0);
+	printf("%s: C1= %d\n", DEVICE_NAME, cali->C1);
+	printf("%s: C2= %d\n", DEVICE_NAME, cali->C2);
+	printf("%s: C3= %d\n", DEVICE_NAME, cali->C3);
+	printf("%s: C4= %d\n", DEVICE_NAME, cali->C4);
+	printf("%s: C5= %d\n", DEVICE_NAME, cali->C5);
+	printf("%s: C6= %d\n", DEVICE_NAME, cali->C6);
+	printf("%s: C7= %d\n", DEVICE_NAME, cali->C7);
+	printf("%s: C8= %d\n", DEVICE_NAME, cali->C8);
+	printf("%s: C9= %d\n", DEVICE_NAME, cali->C9);
+	printf("%s: C10= %d\n", DEVICE_NAME, cali->C10);
+	printf("%s: C11= %d\n", DEVICE_NAME, cali->C11);
+	printf("%s: C12= %d\n", DEVICE_NAME, cali->C12);
+#endif
 exit:
 	return status;
 }
@@ -489,7 +498,7 @@ exit:
  */
 static int fbm340_version_identification(struct fbm340_data *barom)
 {
-	int err;
+	int32_t err;
 	uint8_t buf[2] = {0};
 	uint8_t version = 0;
 	uint8_t bus_wr_data;
@@ -503,33 +512,33 @@ static int fbm340_version_identification(struct fbm340_data *barom)
 
 	version = ((buf[0] & 0xC0) >> 6) | ((buf[1] & 0x70) >> 2);
 #ifdef DEBUG_FBM340
-	printf("%s: The value of version= %#x\n", FBM340_NAME, version);
-#endif//DEBUG_FBM340
+	printf("%s: The value of version: %#x\n", __func__, version);
+#endif
 
 	switch (version)	{
 	case hw_ver_b0:
 		barom->hw_ver = hw_ver_b0;
 #ifdef DEBUG_FBM340
-		printf("%s: The version of sensor is B0.\n", FBM340_NAME);
-#endif//DEBUG_FBM340		
+		printf("%s: The version of sensor is B0.\n", __func__);
+#endif
 		break;
 	case hw_ver_b1:
 		barom->hw_ver = hw_ver_b1;
 #ifdef DEBUG_FBM340
-		printf("%s: The version of sensor is B1.\n", FBM340_NAME);
-#endif//DEBUG_FBM340		
+		printf("%s: The version of sensor is B1.\n", __func__);
+#endif
 		break;
 	case hw_ver_b3:
 		barom->hw_ver = hw_ver_b3;
 #ifdef DEBUG_FBM340
-		printf("%s: The version of sensor is B3.\n", FBM340_NAME);
-#endif//DEBUG_FBM340
+		printf("%s: The version of sensor is B3.\n", __func__);
+#endif
 		break;
 	default:
 		barom->hw_ver = hw_ver_unknown;
 #ifdef DEBUG_FBM340
-		printf("%s: The version of sensor is unknown.\n", FBM340_NAME);
-#endif//DEBUG_FBM340
+		printf("%s: The version of sensor is unknown.\n", __func__);
+#endif
 		break;
 	}
 	return err;
@@ -542,8 +551,8 @@ static int32_t fbm340_set_oversampling_rate(struct fbm340_data *barom
 
 	barom->oversampling_rate = osr_setting;
 #ifdef DEBUG_FBM340
-	printf("Setting of oversampling_rate:%#x\r\n", barom->oversampling_rate);
-#endif//DEBUG_FBM340			
+	printf("%s:Setting of oversampling_rate:%#x\r\n", __func__,barom->oversampling_rate);
+#endif
 
 	/* Setting conversion time for pressure measurement */
 	switch (osr_setting) {
@@ -574,7 +583,7 @@ static int32_t fbm340_set_oversampling_rate(struct fbm340_data *barom
 		barom->bus_read(0xA6, sizeof(uint8_t), &data_buf);
 #ifdef DEBUG_FBM340
 		printf("reg_0xA6:%#x\n\r", data_buf);
-#endif//DEBUG_FBM340
+#endif
 		break;
 	}
 	/* Setting covversion time for temperature measurement */
@@ -589,8 +598,8 @@ static int32_t fbm340_chipid_check(struct fbm340_data *barom)
 
 	err = barom->bus_read(FBM340_CHIP_ID_REG, sizeof(uint8_t), &chip_id_read);
 #ifdef DEBUG_FBM340
-	printf("%s: chip_id reading is %#x \n", FBM340_NAME, chip_id_read);
-#endif//DEBUG_FBM340
+	printf("%s: chip_id reading is %#x \n", __func__, chip_id_read);
+#endif
 
 	if (chip_id_read != FBM340_CHIP_ID) {
 		err = -1;
@@ -618,14 +627,14 @@ void fbm340_update_data(void)
 	if (t_start_flag == 0 && !fbm340_update_rdy) {
 #ifdef DEBUG_FBM340
 		printf("start t_measurement\r\n");
-#endif//DEBUG_FBM340			
+#endif
 		fbm340_startMeasure_temp(barom);
 		t_start_flag = 1;
 		tick_last = TMR0_Ticks;
 	} else if ((tick_diff * 1000 > barom->cnvTime_temp ) && (p_start_flag == 0)) {
 #ifdef DEBUG_FBM340
 		printf("start p_measurement\r\n");
-#endif//DEBUG_FBM340			
+#endif
 		fbm340_get_raw_temperature(barom);
 		fbm340_startMeasure_press(barom);
 		p_start_flag = 1;
@@ -633,7 +642,7 @@ void fbm340_update_data(void)
 	} else if (tick_diff * 1000 > barom->cnvTime_press ) {
 #ifdef DEBUG_FBM340
 		printf("read pressure\r\n");
-#endif//DEBUG_FBM340			
+#endif
 		fbm340_get_raw_pressure(barom);
 		t_start_flag = 0;
 		p_start_flag = 0;
@@ -646,14 +655,14 @@ void fbm340_update_data(void)
 	printf("tick_current:%d\r\n", tick_current);
 	printf("tick_last:%d\r\n", tick_last);
 	printf("FBM340 is updating %d\r\n", TMR0_Ticks);
-#endif//DEBUG_FBM340		
+#endif
 	return ;
 }
 /**
  * @brief      { API for calculating real temperature and pressure values.
  *               The results are stored in fbm340_data structure.
  *               "barom->real_temperature" is represented real temperature value.
- *               "barom->real_temperature" is in uint of drgree Celsius.
+ *               "barom->real_temperature" is in uint of 0.01 drgree Celsius.
  *               "barom->real_pressure" is represented real pressure value.
  *               "barom->real_pressure" is in unit of Pa. }
  *
@@ -687,14 +696,11 @@ int fbm340_calculation(struct fbm340_data *barom)
 		X13 = ((X11 + X12) >> 11) + ((cali->C4 - 122684) << 4);
 		X21 = ((cali->C8 + 1528L) * DT2) >> 11;
 		X22 = (((cali->C9 * DT2) >> 17) * DT2) >> 13;
-		X23 = abs (X22 - X21);
+		X23 = (X22 >= X21) ? (X22 - X21) : (X21 - X22);
 
 		X24 = (X23 >> 11) * (cali->C7 + 596352);
 		X25 = ((X23 & 0x7FF) * (cali->C7 + 596352)) >> 11;
-		if ((X22 - X21) < 0)
-			X26 = ((0 - X24 - X25) >> 9) + cali->C7 + 596352;
-		else
-			X26 = ((X24 + X25) >> 9) + cali->C7 + 596352;
+		X26 = (X21 >= X22 ? ((0 - X24 - X25) >> 9) : ((X24 + X25) >> 9)) + cali->C7 + 596352;
 
 		PP1 = (((UP - 8388608) >> 1) - X13) >> 4;
 		PP2 = ((X26 >> 12) * PP1) >> 1;
@@ -711,23 +717,35 @@ int fbm340_calculation(struct fbm340_data *barom)
 	barom->real_pressure = RP; //uint: Pa
 
 #ifdef DEBUG_FBM340
-	printf("%s: calibrated pressure: %d\n", FBM340_NAME, RP);
-#endif//DEBUG_FBM340
+	printf("%s: calibrated pressure: %d\n", DEVICE_NAME, RP);
+#endif
 
 	return 0;
 }
 /**
  * @brief      { API for converting pressure value to altitude }
  *
- * @param[in]  real_pressure  The real pressure in unit of 0.125 Pa
+ * @param[in]  pressure_input  The pressure_input is in unit of Pa.
  *
- * @return     { Absolute altitude value in unit millimeter(mm) }
+ * @return     { The altitude value is in unit millimeter(mm) }
  */
-int32_t abs_altitude(int32_t real_pressure)
+int32_t fbm340_get_altitude(int32_t pressure_input)
 {
-	int8_t P0;
-	int16_t hs1, dP0;
+	return pressure_altitude_conversion(pressure_input * 8);
+}
+/**
+ * @brief      { This function is used for converting pressure value to altitude.
+ *               The standard sea-level pressure is 1013.25 hPa. }
+ *
+ * @param[in]  real_pressure  The real pressure is in unit of 0.125 Pa
+ *
+ * @return     { The altitude value is in unit of millimeter(mm) }
+ */
+static int32_t pressure_altitude_conversion(int32_t real_pressure)
+{
 	int32_t RP, h0, hs0, HP1, HP2, RH;
+	int16_t hs1, dP0;
+	int8_t P0;
 
 	RP = real_pressure;
 
@@ -812,24 +830,35 @@ int32_t abs_altitude(int32_t real_pressure)
 		hs0	=	-14926	;
 		hs1	=	2682	;
 	}
-	dP0	=	RP - P0 * 8000	;
 
-	HP1	=	( hs0 * dP0 ) >> 1	;
-	HP2	=	((( hs1 * dP0 ) >> 14 ) * dP0 ) >> 4	;
-
-	RH	=	(( HP1 + HP2 ) >> 8 ) + h0	;
+	dP0	=	RP - P0 * 8000;
+	HP1	=	( hs0 * dP0 ) >> 1;
+	HP2	=	((( hs1 * dP0 ) >> 14 ) * dP0 ) >> 4;
+	RH	=	(( HP1 + HP2 ) >> 8 ) + h0;
 
 	return RH;
 }
 /**
  * @brief      { API for calculating water depth }
  *
- * @param[in]  real_pressure  The real pressure, unit: Pa
+ * @param[in]  pressure_input: unit: Pa
+ *
+ * @return     { water depth:
+ *               The unit of water depth is in millimeter(mm). }
+ */
+int32_t fbm340_get_water_depth(int32_t pressure_input)
+{
+	return water_depth_calculation(pressure_input);
+}
+/**
+ * @brief      { This function is used for calculating water depth }
+ *
+ * @param[in]  real_pressure:  The real pressure, unit: Pa
  *
  * @return     { water_depth: water depth
- *               The unit of water_depth is millimeter(mm). }
+ *               The unit of water_depth is in millimeter(mm). }
  */
-int32_t water_depth_calculation(int32_t real_pressure)
+static int32_t water_depth_calculation(int32_t real_pressure)
 {
 #define WATER_DENSITY 1025L /* unit:kg/m^3, range: 1000 to 1050 */
 #define SEA_LEVEL_PRESSURE 101325 /* uint: Pa */
@@ -840,8 +869,8 @@ int32_t water_depth_calculation(int32_t real_pressure)
 	d1 = WATER_DENSITY - 1025L;
 	hc1	= (((d1 * 27325752) >> 5) * d1) >> 5;
 	hc1	= ((((d1 * 27348101) - hc1) >> 10) - 27364648) >> 16;
-	/* The unit of water_depth is millimeter(mm). */ 
-    water_depth = ((((SEA_LEVEL_PRESSURE - pressure) * hc1) >> 10) * 1000) >> 12;
+	/* The unit of water_depth is millimeter(mm). */
+	water_depth = ((((SEA_LEVEL_PRESSURE - pressure) * hc1) >> 10) * 1000) >> 12;
 
 #undef WATER_DENSITY
 #undef SEA_LEVEL_PRESSURE
